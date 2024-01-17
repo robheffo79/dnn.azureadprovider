@@ -27,6 +27,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Configuration;
+using System.Diagnostics;
 using System.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.IO;
@@ -65,7 +66,9 @@ namespace DotNetNuke.Authentication.Azure.Components
         public const string RoleSettingsAadPropertyValue = "Azure";
         public const string DefaultScopes = "email openid profile";
 
-        private const string TokenEndpointPattern = "https://login.microsoftonline.com/{0}/oauth2/v2.0/token";
+		protected const string AzureIdTokenKey = "azure_id_token";
+
+		private const string TokenEndpointPattern = "https://login.microsoftonline.com/{0}/oauth2/v2.0/token";
         private const string LogoutEndpointPattern =
             "https://login.microsoftonline.com/{0}/oauth2/logout?post_logout_redirect_uri={1}";
         private const string AuthorizationEndpointPattern = "https://login.microsoftonline.com/{0}/oauth2/v2.0/authorize";
@@ -295,7 +298,6 @@ namespace DotNetNuke.Authentication.Azure.Components
 
             TokenMethod = HttpMethod.POST;
 
-
             if (!string.IsNullOrEmpty(Settings.TenantId))
             {
                 TokenEndpoint = new Uri(string.Format(Utils.GetAppSetting("AzureAD.TokenEndpointPattern", TokenEndpointPattern), Settings.TenantId));
@@ -343,7 +345,7 @@ namespace DotNetNuke.Authentication.Azure.Components
             return oState.Service == Service;
         }
 
-        internal bool LoadTokenInternal(string token, bool verifyToken = true)
+		internal bool LoadTokenInternal(string token, bool verifyToken = true, string idToken = null)
         {
             // Clean token
             if (token.Contains("oauth_token="))
@@ -372,7 +374,7 @@ namespace DotNetNuke.Authentication.Azure.Components
                     authorization = aadController.ValidateAuthHeader(token);
                     username = string.IsNullOrEmpty(authorization) 
                         ? string.Empty 
-                        : aadController.ValidateAuthorizationValue(authorization);
+                        : aadController.ValidateAuthorizationValue(authorization, idToken);
                 }
                 catch (Exception ex)
                 {
@@ -401,12 +403,11 @@ namespace DotNetNuke.Authentication.Azure.Components
                 AuthToken = token;
                 return true;
             }
-
         }
 
-        public bool LoadToken(string token)
+        public bool LoadToken(string token, string idToken = null)
         {
-            return LoadTokenInternal(token);
+            return LoadTokenInternal(token, true, idToken);
         }
 
         internal void LoadTokenCookieInternal(string suffix, bool verifyToken = true)
@@ -421,7 +422,7 @@ namespace DotNetNuke.Authentication.Azure.Components
             }
         }
 
-        protected new void LoadTokenCookie(string suffix)
+		protected new void LoadTokenCookie(string suffix)
         {
             LoadTokenCookieInternal(suffix);
         }
@@ -443,13 +444,17 @@ namespace DotNetNuke.Authentication.Azure.Components
             var jsonSerializer = new JavaScriptSerializer();
             var tokenDictionary = jsonSerializer.DeserializeObject(responseText) as Dictionary<string, object>;
             var token = Convert.ToString(tokenDictionary["access_token"]);
-            
-            JwtIdToken = new JwtSecurityToken(token);
-            LoadToken(token);
-            return AuthToken;
+            var idToken = Convert.ToString(tokenDictionary["id_token"]);
+
+            AppendDebugLog($"Azure Tokens Received:\r\nAccess = {token}\r\nId = {idToken}");
+
+			JwtIdToken = new JwtSecurityToken(idToken);
+            LoadToken(token, idToken);
+
+			return AuthToken;
         }
 
-        public override TUserData GetCurrentUser<TUserData>()
+		public override TUserData GetCurrentUser<TUserData>()
         {
             base.LoadTokenCookie(String.Empty);
             return GetCurrentUserInternal() as TUserData;
@@ -466,7 +471,7 @@ namespace DotNetNuke.Authentication.Azure.Components
             {
                 return null;
             }
-            var claims = JwtIdToken.Claims.ToArray();
+            var claims = (pToken ?? JwtIdToken).Claims.ToArray();
             EnsureClaimExists(claims, EmailClaimName);
             EnsureClaimExists(claims, UserIdClaim);
             EnsureClaimExists(claims, "oid");       // we need this claim to make calls to AAD Graph
@@ -524,40 +529,61 @@ namespace DotNetNuke.Authentication.Azure.Components
                 return;
             }
 
+            if (CustomClaimsMappings != null && CustomClaimsMappings.Any())
+            {
+                AppendDebugLog($"Custom Claims Mappings: {String.Join(", ", CustomClaimsMappings.Select(m => $"{m.AadClaimName} => {m.DnnProfilePropertyName}"))}");
+            }
+
             var claims = JwtIdToken.Claims.ToArray();
 
-            foreach (var claim in claims)
+			if (claims != null && CustomClaimsMappings.Any())
+			{
+				AppendDebugLog($"Token Claims: {String.Join(", ", claims.Select(m => $"{m.Type} => {m.Value}"))}");
+			}
+
+			foreach (var claim in claims)
             {
                 switch (claim.Type)
                 {
                     case "emails":
                         if (properties["Email"] == null)
+                        {
                             properties.Set("Email", claim.Value);
+							AppendDebugLog($"Adding claims mapping. 'email' => '{claim.Value}'");
+						}
                         break;
                     case "city":
                         properties.Set("City", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'city' => '{claim.Value}'");
+						break;
                     case "country":
                         properties.Set("Country", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'country' => '{claim.Value}'");
+						break;
                     case "name":
                         properties.Set("DisplayName", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'name' => '{claim.Value}'");
+						break;
                     case "given_name":
                         properties.Set("FirstName", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'given_name' => '{claim.Value}'");
+						break;
                     case "family_name":
                         properties.Set("LastName", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'family_name' => '{claim.Value}'");
+						break;
                     case "postalCode":
                         properties.Set("PostalCode", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'postalCode' => '{claim.Value}'");
+						break;
                     case "state":
                         properties.Set("Region", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'state' => '{claim.Value}'");
+						break;
                     case "streetAddress":
                         properties.Set("Street", claim.Value);
-                        break;
+						AppendDebugLog($"Adding claims mapping. 'streetAddress' => '{claim.Value}'");
+						break;
                     case "exp":
                     case "nbf":
                     case "ver":
@@ -576,7 +602,9 @@ namespace DotNetNuke.Authentication.Azure.Components
                         var mapping = CustomClaimsMappings.FirstOrDefault(c => c.AadClaimName.ToLower() == claim.Type.ToLower());
                         if (mapping != null)
                         {
-                            properties.Add(mapping.DnnProfilePropertyName, claim.Value);
+                            AppendDebugLog($"Adding custom claims mapping. '{mapping.DnnProfilePropertyName}' => '{claim.Value}'");
+
+							properties.Add(mapping.DnnProfilePropertyName, claim.Value);
                         }
                         break;
                 }
@@ -584,7 +612,7 @@ namespace DotNetNuke.Authentication.Azure.Components
         }
 
 
-        public void UpdateUserProfile(JwtSecurityToken pToken = null, bool updateProfilePicture = true, bool updateUserRoles = true)
+        public void UpdateUserProfile(JwtSecurityToken pToken = null, bool updateProfilePicture = true, bool updateUserRoles = true, JwtSecurityToken idToken = null)
         {
             if (pToken == null && (!IsCurrentUserAuthorized() || JwtIdToken == null))
             {
@@ -594,6 +622,11 @@ namespace DotNetNuke.Authentication.Azure.Components
             {
                 JwtIdToken = pToken;
             }
+            if(idToken != null)
+            {
+                JwtIdToken = idToken;
+            }
+
             var user = GetCurrentUserInternal(pToken).ToUserInfo(Settings.UsernamePrefixEnabled);
             // Update user
             var userInfo = UserController.GetUserByName(PortalSettings.Current.PortalId, user.Username);
@@ -1079,6 +1112,12 @@ namespace DotNetNuke.Authentication.Azure.Components
 
             try
             {
+                AppendDebugLog($"Making web request => [{request.Method}] {request.RequestUri}");
+                if(!String.IsNullOrWhiteSpace(contentParameters))
+                {
+                    AppendDebugLog($"Request parameters:\r\n--BEGIN PARAMS--\r\n{contentParameters}\r\n--END PARAMS--");
+                }
+
                 using (WebResponse response = request.GetResponse())
                 {
                     using (Stream responseStream = response.GetResponseStream())
@@ -1095,13 +1134,18 @@ namespace DotNetNuke.Authentication.Azure.Components
             }
             catch (WebException ex)
             {
-                using (Stream responseStream = ex.Response.GetResponseStream())
+				AppendDebugLog($"Web request failed => {ex.Message}");
+
+				using (Stream responseStream = ex.Response.GetResponseStream())
                 {
                     if (responseStream != null)
                     {
                         using (var responseReader = new StreamReader(responseStream))
                         {
-                            Logger.ErrorFormat("WebResponse exception: {0}", responseReader.ReadToEnd());
+                            String response = responseReader.ReadToEnd();
+
+							AppendDebugLog($"Response:\r\n--BEGIN RESPONSE--\r\n{response}\r\n--END RESPONSE--");
+							Logger.ErrorFormat("WebResponse exception: {0}", response);
                         }
                     }
                 }
@@ -1128,6 +1172,27 @@ namespace DotNetNuke.Authentication.Azure.Components
             }
         }
 
+        private String debugFilename = null;
+        private Object debugLock = new Object();
+        private void AppendDebugLog(String message)
+        {
+#if DEBUG
+            lock(debugLock)
+            {
+                if(debugFilename == null)
+                {
+                    debugFilename = Path.Combine(@"D:\Sites\AlpineHealth\AzureLogs", $"{DateTime.Now:yyyyMMddHHmmssfff}.adlog");
+                    String path = Path.GetDirectoryName(debugFilename);
+                    if(!Directory.Exists(path))
+                        Directory.CreateDirectory(path);
+
+                    File.AppendAllText(debugFilename, "Log Initialised\r\n");
+                }
+
+                File.AppendAllText(debugFilename, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | {message.TrimEnd()}\r\n");
+            }
+#endif
+        }
     }
 
     internal static class AuthExtensions

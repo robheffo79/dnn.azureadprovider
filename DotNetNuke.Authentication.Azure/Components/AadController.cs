@@ -172,7 +172,7 @@ namespace DotNetNuke.Authentication.Azure.Components
             return token;
         }
 
-        internal string ValidateAuthorizationValue(string authorization)
+        internal string ValidateAuthorizationValue(string authorization, string idToken = null)
         {
             var cache = DotNetNuke.Services.Cache.CachingProvider.Instance();
             // Calculate a hash of a string
@@ -211,7 +211,8 @@ namespace DotNetNuke.Authentication.Azure.Components
             if (jwt == null) 
                 return null; 
 
-            var userInfo = TryGetUser(jwt);  
+            JwtSecurityToken idJwt = idToken != null ? new JwtSecurityToken(idToken) : null;
+            var userInfo = TryGetUser(jwt, idJwt);  
             var userName = userInfo?.Username;
 
             cache.Insert(cacheKey, userName, null, jwt.ValidTo, TimeSpan.Zero);
@@ -219,7 +220,7 @@ namespace DotNetNuke.Authentication.Azure.Components
             return userName;
         }
 
-        private UserInfo TryGetUser(JwtSecurityToken jwt)
+        private UserInfo TryGetUser(JwtSecurityToken jwt, JwtSecurityToken idJwt)
         {
             try
             {
@@ -243,7 +244,7 @@ namespace DotNetNuke.Authentication.Azure.Components
                     if (Logger.IsDebugEnabled) Logger.Debug($"Can't find '{userIdClaim}' claim on token");
                 }
 
-                var userInfo = GetOrCreateCachedUserInfo(jwt, portalSettings, userClaim);
+                var userInfo = GetOrCreateCachedUserInfo(jwt, portalSettings, userClaim, idJwt);
                 if (userInfo == null)
                 {
                     if (Logger.IsDebugEnabled) Logger.Debug("Invalid user");
@@ -272,7 +273,7 @@ namespace DotNetNuke.Authentication.Azure.Components
 
         }
 
-        private static UserInfo GetOrCreateCachedUserInfo(JwtSecurityToken jwt, PortalSettings portalSettings, System.Security.Claims.Claim userClaim)
+        private static UserInfo GetOrCreateCachedUserInfo(JwtSecurityToken jwt, PortalSettings portalSettings, System.Security.Claims.Claim userClaim, JwtSecurityToken idJwt)
         {
             var usernamePrefixEnabled = bool.Parse(AzureConfig.GetSetting(AzureConfig.ServiceName, "UsernamePrefixEnabled", portalSettings.PortalId, "true"));
             var usernameToFind = usernamePrefixEnabled ? $"{AzureConfig.ServiceName}-{userClaim.Value}" : userClaim.Value;
@@ -295,7 +296,7 @@ namespace DotNetNuke.Authentication.Azure.Components
                 }
 
                 azureClient.AuthenticateUser(userData, portalSettings, HttpContext.Current.Request["REMOTE_ADDR"], azureClient.AddCustomProperties, azureClient.OnUserAuthenticated);
-                azureClient.UpdateUserProfile(jwt, false, false);
+                azureClient.UpdateUserProfile(jwt, false, false, idJwt);
                 cache.Insert($"SyncAADToken|{tokenKey}", "OK", null, jwt.ValidTo, TimeSpan.Zero);
             }
 
