@@ -446,8 +446,6 @@ namespace DotNetNuke.Authentication.Azure.Components
             var token = Convert.ToString(tokenDictionary["access_token"]);
             var idToken = Convert.ToString(tokenDictionary["id_token"]);
 
-            AppendDebugLog($"Azure Tokens Received:\r\nAccess = {token}\r\nId = {idToken}");
-
 			JwtIdToken = new JwtSecurityToken(idToken);
             LoadToken(token, idToken);
 
@@ -529,17 +527,7 @@ namespace DotNetNuke.Authentication.Azure.Components
                 return;
             }
 
-            if (CustomClaimsMappings != null && CustomClaimsMappings.Any())
-            {
-                AppendDebugLog($"Custom Claims Mappings: {String.Join(", ", CustomClaimsMappings.Select(m => $"{m.AadClaimName} => {m.DnnProfilePropertyName}"))}");
-            }
-
             var claims = JwtIdToken.Claims.ToArray();
-
-			if (claims != null && CustomClaimsMappings.Any())
-			{
-				AppendDebugLog($"Token Claims: {String.Join(", ", claims.Select(m => $"{m.Type} => {m.Value}"))}");
-			}
 
 			foreach (var claim in claims)
             {
@@ -547,42 +535,31 @@ namespace DotNetNuke.Authentication.Azure.Components
                 {
                     case "emails":
                         if (properties["Email"] == null)
-                        {
                             properties.Set("Email", claim.Value);
-							AppendDebugLog($"Adding claims mapping. 'email' => '{claim.Value}'");
-						}
                         break;
                     case "city":
                         properties.Set("City", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'city' => '{claim.Value}'");
 						break;
                     case "country":
                         properties.Set("Country", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'country' => '{claim.Value}'");
 						break;
                     case "name":
                         properties.Set("DisplayName", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'name' => '{claim.Value}'");
 						break;
                     case "given_name":
                         properties.Set("FirstName", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'given_name' => '{claim.Value}'");
 						break;
                     case "family_name":
                         properties.Set("LastName", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'family_name' => '{claim.Value}'");
 						break;
                     case "postalCode":
                         properties.Set("PostalCode", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'postalCode' => '{claim.Value}'");
 						break;
                     case "state":
                         properties.Set("Region", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'state' => '{claim.Value}'");
 						break;
                     case "streetAddress":
                         properties.Set("Street", claim.Value);
-						AppendDebugLog($"Adding claims mapping. 'streetAddress' => '{claim.Value}'");
 						break;
                     case "exp":
                     case "nbf":
@@ -601,11 +578,7 @@ namespace DotNetNuke.Authentication.Azure.Components
                         // So, we have to map this custom claim to a DNN profile property
                         var mapping = CustomClaimsMappings.FirstOrDefault(c => c.AadClaimName.ToLower() == claim.Type.ToLower());
                         if (mapping != null)
-                        {
-                            AppendDebugLog($"Adding custom claims mapping. '{mapping.DnnProfilePropertyName}' => '{claim.Value}'");
-
-							properties.Add(mapping.DnnProfilePropertyName, claim.Value);
-                        }
+                            properties.Add(mapping.DnnProfilePropertyName, claim.Value);
                         break;
                 }
             }
@@ -1112,12 +1085,6 @@ namespace DotNetNuke.Authentication.Azure.Components
 
             try
             {
-                AppendDebugLog($"Making web request => [{request.Method}] {request.RequestUri}");
-                if(!String.IsNullOrWhiteSpace(contentParameters))
-                {
-                    AppendDebugLog($"Request parameters:\r\n--BEGIN PARAMS--\r\n{contentParameters}\r\n--END PARAMS--");
-                }
-
                 using (WebResponse response = request.GetResponse())
                 {
                     using (Stream responseStream = response.GetResponseStream())
@@ -1134,18 +1101,13 @@ namespace DotNetNuke.Authentication.Azure.Components
             }
             catch (WebException ex)
             {
-				AppendDebugLog($"Web request failed => {ex.Message}");
-
 				using (Stream responseStream = ex.Response.GetResponseStream())
                 {
                     if (responseStream != null)
                     {
                         using (var responseReader = new StreamReader(responseStream))
                         {
-                            String response = responseReader.ReadToEnd();
-
-							AppendDebugLog($"Response:\r\n--BEGIN RESPONSE--\r\n{response}\r\n--END RESPONSE--");
-							Logger.ErrorFormat("WebResponse exception: {0}", response);
+							Logger.ErrorFormat("WebResponse exception: {0}", responseReader.ReadToEnd());
                         }
                     }
                 }
@@ -1170,28 +1132,6 @@ namespace DotNetNuke.Authentication.Azure.Components
             {
                 UserAuthenticated(null, ea);
             }
-        }
-
-        private String debugFilename = null;
-        private Object debugLock = new Object();
-        private void AppendDebugLog(String message)
-        {
-#if DEBUG
-            lock(debugLock)
-            {
-                if(debugFilename == null)
-                {
-                    debugFilename = Path.Combine(@"D:\Sites\AlpineHealth\AzureLogs", $"{DateTime.Now:yyyyMMddHHmmssfff}.adlog");
-                    String path = Path.GetDirectoryName(debugFilename);
-                    if(!Directory.Exists(path))
-                        Directory.CreateDirectory(path);
-
-                    File.AppendAllText(debugFilename, "Log Initialised\r\n");
-                }
-
-                File.AppendAllText(debugFilename, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | {message.TrimEnd()}\r\n");
-            }
-#endif
         }
     }
 
